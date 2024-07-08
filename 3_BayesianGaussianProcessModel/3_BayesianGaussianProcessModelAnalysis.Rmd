@@ -1,0 +1,196 @@
+---
+title: "Beyesian Analysis"
+output: html_document
+date: "2024-07-03"
+---
+
+First, we need to build a proximity matrix for the 63 countries, to include in the multilevel analysis to account for nonindependence between the countries used as predictor variables.  
+
+1. Extracting the coordinates file for all counrties
+```{r}
+# From GitHub
+url = "https://gist.githubusercontent.com/ofou/df09a6834a8421b4f376c875194915c9/raw/355eb56e164ddc3cd1a9467c524422cb674e71a9/country-capital-lat-long-population.csv"
+
+raw_data = read.csv(url)
+raw_data$Country = tolower(raw_data$Country)
+
+head(raw_data)
+```
+
+
+2. Opening Mada's Predictor Data
+```{r}
+library(readxl)
+pdata = read_excel("PredictorData.xlsx")
+
+head(pdata)
+```
+
+3. Adding the Latitude and Longitude coordinates of all 63 countries as two columns from the online coordinates database. 
+```{r}
+library(dplyr)
+library(openxlsx)
+new_predictor = pdata %>% 
+  left_join(raw_data, by = "Country")
+
+# This data contains NA values for coordinates for a few countries, so we manually completed them. 
+```
+
+4. Open NewPredictor, the complete list of countries and their polar coordinates. 
+```{r}
+new_predictor = read_excel("NewPredictor.xlsx")
+head(new_predictor)
+# View(new_predictor)
+```
+
+5. Create the distance matrix
+```{r}
+library(dplyr)
+library(geosphere)
+
+countries = new_predictor$Country # Array of countries
+
+# Array of latitudes in order of countries array + check to ensure their range is correct
+latitudes = new_predictor$Latitude 
+l_range = between(latitudes, -90, 90)
+print(length(l_range))
+
+# Array of longitudes in order of countries array + check to ensure their range is correct
+longitudes = new_predictor$Longitude
+lg_range = between(longitudes, -180, 180)
+print(length(lg_range))
+
+# Build data frame for geosphere's distm function. Note, all distances will be positive or 0. 
+coordinates_df <- data.frame(longitude = longitudes, latitude = latitudes)
+coordinates_matrix <- as.matrix(coordinates_df) 
+distance_matrix <- distm(coordinates_matrix, fun = distGeo)
+
+# print(distance_matrix)
+```
+
+
+6. Compute the geographic proximity matrix as 1 - [log(geographic distance matrix) scaled between 0 and 1].
+
+```{r, warning=T}
+
+# Test to ensure all distances are positive.
+all_positive <- all(distance_matrix >= 0)
+
+# Print the result
+if (all_positive) {
+  print("All entries in the matrix are positive.")
+} else {
+  print("Matrix contains non-positive entries.")
+}
+
+
+# Take log of non-zero entries
+log_distances = distance_matrix # new matrix where the log is stored 
+indices = which(log_distances != 0) # indices of nonzero enteries
+log_distances[indices] = log(distance_matrix[indices])
+# View(log_distances)
+
+
+# Re-scaling between 0 and 1
+mat_min = min(log_distances)
+mat_max = max(log_distances)
+rescaled_log_distances = (log_distances - mat_min)/(mat_max - mat_min)
+# View(rescaled_log_distances)
+
+
+# Final proximity matrix.
+proximity_matrix <- 1 - rescaled_log_distances
+colnames(proximity_matrix) = countries
+rownames(proximity_matrix) = countries
+head(proximity_matrix)
+# View(proximity_matrix)
+```
+
+
+7. Beyesian Multilevel modelling
+
+i. Belief
+```{r}
+library(brms)
+library(lme4)
+library(lmerTest)
+
+data = read.csv("data.csv")
+# View(data)
+
+
+m_belief <- brm(
+  BELIEFcc ~ Individualism + (1 | gr(Country, cov = proximity_matrix)), 
+  data = data,
+  data2 = list(proximity_matrix = proximity_matrix),
+  family = gaussian()
+  )
+
+print(summary(m_belief))
+
+plot(m_belief)
+```
+
+
+ii. Policy 
+```{r}
+m_policy = brm(
+  POLICYcc ~ Individualism + (1 | gr(Country, cov = proximity_matrix)), 
+  data = data,
+  data2 = list(proximity_matrix = proximity_matrix),
+  family = gaussian()
+  )
+
+print(summary(m_policy))
+plot(m_policy)
+```
+
+
+iii. Share
+```{r}
+
+m_share = brm(
+  SHAREcc ~ Individualism + (1 | gr(Country, cov = proximity_matrix)), 
+  data = data,
+  data2 = list(proximity_matrix = proximity_matrix),
+  family = bernoulli("logit")
+  )
+
+print(summary(m_share))
+plot(m_share)
+```
+
+iv. Wept 
+```{r}
+data$WEPTcc <- factor(
+  data$WEPTcc, 
+  levels = c(0, 1, 2, 3, 4, 5, 6, 7, 8),
+  labels = c('Level0', 'Level1', 'Level2', 'Level3', 'Level4','Level5', 'Level6', 'Level7','Level8'),
+  ordered = TRUE
+)
+
+m_wept = brm(
+  WEPTcc ~ Individualism + (1 | gr(Country, cov = proximity_matrix)), 
+  data = data,
+  data2 = list(proximity_matrix = proximity_matrix),
+  family = cumulative("logit")
+  )
+
+print(summary(m_wept))
+plot(m_wept)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
